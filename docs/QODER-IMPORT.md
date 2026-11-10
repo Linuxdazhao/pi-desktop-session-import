@@ -60,16 +60,20 @@ labeled reference text, because the Host import contract has no running-tool
 state. Reasoning is labeled reference text rather than a source system prompt.
 
 An active JSONL leaf selects its ancestry; sibling leaves are separately
-selectable histories. Native message ordering and call/result pairing are
+selectable histories. Branch identities derive from stable fork edges,
+independently of the active leaf or whether a branch gains messages.
+Native message ordering and call/result pairing are
 preserved. Desktop-claimed IDs, including deleted rows, suppress shared JSONL
 projections so they cannot reappear as CLI/IDE conversations. Ambiguous or
-conflicting product ownership fails closed. An unreadable recognized database
-can prevent the shared discovery pass from establishing ownership; its error
-is visible instead of guessing another product.
+conflicting product ownership fails closed. Unreadable databases and malformed
+transcripts produce per-source diagnostics without removing unrelated healthy
+results. If Desktop ownership cannot be established, shared JSONL projections
+are excluded with a diagnostic instead of guessing another product.
 
 Source/profile/native IDs determine stable imported external IDs. Copies with
 conflicting content are not automatically chosen by timestamp. Source bodies
-are re-read and their digests checked between scan, preview and commit; stale
+and relevant IDE workspace/index dependencies are re-read and their digests
+checked between scan, preview and commit; stale
 selections require another scan. Renderer-supplied title, project or file-path
 fields cannot redirect a source read. File reads reject containment escapes
 and symlinks; source paths never authorize arbitrary attachment reads.

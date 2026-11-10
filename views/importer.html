@@ -338,7 +338,7 @@
         main.panes { grid-template-columns: 1fr; grid-template-rows: 40% 1fr; }
       }
       main.panes { container-type: inline-size; }
-      #project-list { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+      #project-list { padding: 8px 12px; border-bottom: 1px solid var(--border); max-height: 35%; overflow-y: auto; flex-shrink: 0; }
       .project-row { display: flex; gap: 6px; flex-wrap: wrap; padding: 5px 0; }
       .project-row input { flex: 1; min-width: 120px; }
       .project-row span { width: 100%; font-size: 12px; }
@@ -536,13 +536,14 @@
               const sc = card.querySelector(".scount");
               paintCount(sc, res, adapter.source);
               sc.classList.add("ok");
+              if (res.error) { sc.classList.add("warn"); sc.textContent += ` · ${t("importer.source.scanFailed")}: ${res.error.message}`; }
             } else if (res.error && res.error.code === "TIMEOUT") {
               const sc = card.querySelector(".scount");
               sc.textContent = t("importer.source.scanTimeout");
               sc.classList.add("warn");
             } else if (res.error) {
               const sc = card.querySelector(".scount");
-              sc.textContent = t("importer.source.scanFailed");
+              sc.textContent = `${t("importer.source.scanFailed")}: ${res.error.message}`;
               sc.classList.add("warn");
             } else {
               card.querySelector(".scount").textContent = t("importer.source.notFound");

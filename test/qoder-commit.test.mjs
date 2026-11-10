@@ -78,6 +78,11 @@ test("plugin entry scans, previews, remaps and imports Qoder through the existin
   assert.equal(stale.failed.length, 1);
   assert.match(stale.failed[0].error, /Source changed/);
   assert.equal(batches.length, 2, "stale content does not reach Host");
+  fs.writeFileSync(path.join(projectDir, "broken.jsonl"), "not json\n");
+  const partial = await main.onPanelInvoke("import.scanSource", { source: "qoder-cli", full: true });
+  assert.equal(partial.found, true);
+  assert.equal(partial.count, 1);
+  assert.equal(partial.error.code, "PARTIAL_SOURCE", "partial projects must not mask source diagnostics");
 });
 
 test("a Desktop project without conversations is detected and can be registered independently", async (t) => {

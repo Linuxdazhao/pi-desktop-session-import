@@ -11,6 +11,8 @@ const { DatabaseSync } = require("node:sqlite");
 const { createQoderAdapters } = require("../lib/sources/qoder");
 const { locations, readFile, parseTranscript, MAX_BYTES } = require("../lib/sources/qoder-files");
 const { transcriptMessages, branches, desktopMessages } = require("../lib/sources/qoder-messages");
+const { readDesktop } = require("../lib/sources/qoder-desktop");
+const { readIde } = require("../lib/sources/qoder-ide");
 const T = "2026-11-01T10:00:00.000Z";
 
 function fixture(t) {
@@ -109,7 +111,8 @@ test("Desktop stale/deleted selections and unsupported versions are rejected", a
   db.prepare("UPDATE chat_session_messages SET payload_json = ?").run(JSON.stringify({ role: "user", text: "changed" }));
   await assert.rejects(a.convert(summary), /Source changed/);
   db.exec("UPDATE chat_session_messages SET payload_schema_version = 99");
-  await assert.rejects(a.scan(), /Unsupported.*version/);
+  assert.deepEqual(await a.scan(), []);
+  assert.match(a.diagnostics().join(), /Unsupported.*version/);
   db.exec("UPDATE chat_session_messages SET payload_schema_version = 1; UPDATE chat_sessions SET deleted_at = 1");
   assert.deepEqual(await a.scan(), []);
 });
@@ -216,4 +219,84 @@ test("tool blocks keep order and distinguish orphan, failed and pending results"
   const raw = desktopMessages([{ message_id: "a", payload_json: '{"role":"assistant","text":"fallback"}' }], T);
   assert.equal(raw.messages[0].content, "fallback");
   assert.equal(branches([{ type: "user", message: { content: "no UUID" } }]).length, 1);
+});
+
+test("active-leaf changes and branch extension preserve each branch's external identity", async (t) => {
+  const f = fixture(t);
+  const records = [
+    { type: "workspace-directories", sessionId: "s", directories: [f.folder] },
+    { type: "user", sessionId: "s", uuid: "u", timestamp: T, message: { content: "start" } },
+    { type: "assistant", sessionId: "s", uuid: "a", parentUuid: "u", timestamp: T, message: { content: "branch-a" } },
+    { type: "assistant", sessionId: "s", uuid: "b", parentUuid: "u", timestamp: T, message: { content: "branch-b" } },
+    { type: "active-leaf", sessionId: "s", leafUuid: "a" },
+  ];
+  const file = transcript(f, { id: "s", lines: records });
+  const a = f.source("qoder-cli");
+  const identities = async () => {
+    const result = new Map();
+    for (const summary of await a.scan()) result.set((await a.convert(summary)).messages.at(-1).content, summary.externalId);
+    return result;
+  };
+  const before = await identities();
+  records.at(-1).leafUuid = "b";
+  fs.writeFileSync(file, records.map(JSON.stringify).join("\n"));
+  const switched = await identities();
+  assert.deepEqual([...switched].sort(), [...before].sort());
+  records.push({ type: "assistant", sessionId: "s", uuid: "b2", parentUuid: "b", timestamp: T, message: { content: "branch-b-extended" } });
+  fs.writeFileSync(file, records.map(JSON.stringify).join("\n"));
+  const extended = await identities();
+  assert.equal(extended.get("branch-b-extended"), before.get("branch-b"));
+  assert.equal(extended.get("branch-a"), before.get("branch-a"));
+});
+
+test("one malformed transcript leaves healthy Desktop and CLI results available with diagnostics", async (t) => {
+  const f = fixture(t);
+  const { db, add } = desktop(f); add("u", { role: "user", text: "healthy Desktop" }); db.close();
+  const good = transcript(f);
+  fs.writeFileSync(path.join(path.dirname(good), "broken.jsonl"), "not json\n");
+  const [desktopRows, cliRows] = await Promise.all([f.source("qoder-desktop").scan(), f.source("qoder-cli").scan()]);
+  assert.equal(desktopRows.length, 1);
+  assert.equal(cliRows.length, 1);
+  assert.deepEqual(f.source("qoder-desktop").diagnostics(), []);
+  assert.match(f.source("qoder-cli").diagnostics().join(), /identity/);
+});
+
+test("IDE workspace metadata changes invalidate an otherwise unchanged transcript", async (t) => {
+  const f = fixture(t);
+  const ws = path.join(f.ideRoot, "User", "workspaceStorage", "w");
+  fs.mkdirSync(ws, { recursive: true });
+  const index = path.join(ws, "workspace.json");
+  fs.writeFileSync(index, JSON.stringify({ folder: pathToFileURL(f.folder).href }));
+  const storage = path.join(f.ideRoot, "User", "globalStorage"); fs.mkdirSync(storage, { recursive: true });
+  const db = new DatabaseSync(path.join(storage, "state.vscdb"));
+  db.exec("CREATE TABLE ItemTable (key TEXT, value TEXT)");
+  db.prepare("INSERT INTO ItemTable VALUES (?,?)").run("lingma.chat.localHistory.w", JSON.stringify([{ sessionId: "s", title: "Original", timestamp: T }]));
+  db.close();
+  transcript(f, { id: "s", nested: true });
+  const a = f.source("qoder-ide"), [summary] = await a.scan();
+  fs.writeFileSync(index, JSON.stringify({ folder: pathToFileURL(path.join(f.home, "moved")).href }));
+  await assert.rejects(a.convert(summary), /metadata changed/);
+});
+
+for (const kind of ["desktop", "ide"]) test(`${kind} refuses a database replaced with an outside symlink during open`, async (t) => {
+  const f = fixture(t);
+  let root, file, read;
+  if (kind === "desktop") {
+    const { db } = desktop(f); db.close();
+    root = f.desktopRoot; file = path.join(root, "main.sqlite"); read = readDesktop;
+  } else {
+    root = f.ideRoot; file = path.join(root, "User", "globalStorage", "state.vscdb");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const db = new DatabaseSync(file); db.exec("CREATE TABLE ItemTable (key TEXT, value TEXT)"); db.close(); read = readIde;
+  }
+  const outside = path.join(f.home, "outside.sqlite"); fs.copyFileSync(file, outside);
+  const original = fs.promises.lstat;
+  let swapped = false;
+  fs.promises.lstat = async function (target, ...args) {
+    const result = await original.call(this, target, ...args);
+    if (!swapped && target === file) { swapped = true; fs.unlinkSync(file); fs.symlinkSync(outside, file); }
+    return result;
+  };
+  try { await assert.rejects(read(root), /database changed/); }
+  finally { fs.promises.lstat = original; }
 });

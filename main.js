@@ -419,6 +419,8 @@ async function scanSource(payload) {
   // honest about what it will actually import.
   const { deduped, oversizedCount } = dedupeSummaries(sessions, source);
   sessions = deduped;
+  const diagnostics = adapter.diagnostics?.() || [];
+  if (diagnostics.length && !error) error = { code: "PARTIAL_SOURCE", message: diagnostics.join("; ") };
   cache.set(source, sessions);
   cacheError.set(source, error);
   cachePartial.set(source, useFast);
