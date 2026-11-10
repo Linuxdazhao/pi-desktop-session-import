@@ -138,6 +138,22 @@ test("CLI uses structured roots, keeps branches separate, and rejects forged or 
   await assert.rejects(a.convert(list[0]), /Source changed/);
 });
 
+test("empty Qoder transcripts are quiet and metadata-only CLI projects require no conversation", async (t) => {
+  const f = fixture(t);
+  transcript(f, { id: "empty", lines: [] });
+  transcript(f, { id: "project-only", lines: [
+    { type: "workspace-directories", sessionId: "project-only", directories: [f.folder] },
+  ] });
+  const cli = f.source("qoder-cli");
+  const sessions = await cli.scan();
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].messageCount, 0);
+  assert.equal(sessions[0].importable, false);
+  assert.deepEqual(cli.listProjects().map(project => project.path), [f.folder]);
+  assert.deepEqual(cli.diagnostics(), []);
+  assert.deepEqual(f.source("qoder-ide").diagnostics(), []);
+});
+
 test("Desktop-owned projections, including deleted sessions, are never misclassified as CLI", async (t) => {
   const f = fixture(t);
   const { db } = desktop(f);

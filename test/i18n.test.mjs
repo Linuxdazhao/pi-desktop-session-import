@@ -16,15 +16,15 @@ const { getMessage, detectLocale, DICT, LOCALES } = require("../lib/i18n.js");
 
 describe("lib/i18n getMessage", () => {
   test("zh-CN resolves the Chinese string", () => {
-    assert.strictEqual(getMessage("zh-CN", "importer.scan"), "扫描本机工具");
+    assert.strictEqual(getMessage("zh-CN", "importer.scan"), "重新扫描本机工具");
   });
 
   test("en resolves the English string", () => {
-    assert.strictEqual(getMessage("en", "importer.scan"), "Scan local tools");
+    assert.strictEqual(getMessage("en", "importer.scan"), "Rescan local tools");
   });
 
   test("unknown locale falls back to zh-CN", () => {
-    assert.strictEqual(getMessage("fr", "importer.scan"), "扫描本机工具");
+    assert.strictEqual(getMessage("fr", "importer.scan"), "重新扫描本机工具");
   });
 
   test("missing key falls back to the key itself", () => {

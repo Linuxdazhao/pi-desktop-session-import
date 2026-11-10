@@ -103,7 +103,7 @@
       .source-card.active { border-color: var(--muted); }
       .source-card.dim { opacity: 0.45; cursor: default; }
       .source-card .sname { font-weight: 650; font-size: 13px; }
-      .source-card .scount { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+      .source-card .scount { color: var(--muted); font-size: 11.5px; margin-top: 2px; overflow-wrap: anywhere; }
       .source-card .scount.ok { color: var(--ok); }
       .source-card .sbadge {
         display: inline-block;
@@ -406,6 +406,8 @@
       const $ = (id) => document.getElementById(id);
       const state = {
         adapters: [],
+        scanning: false,
+        scanVersion: 0,
         sources: new Map(), // source -> {found, count}
         sessions: [],
         projects: [],
@@ -490,70 +492,87 @@
         $("import-btn").disabled = state.selected.size === 0;
       };
 
-      async function scanSources() {
-        $("scan-btn").disabled = true;
-        const grid = $("source-grid");
-        clear(grid);
-        $("panes").classList.add("hidden");
-        setStatus(t("importer.status.scanning"));
-        state.sources = new Map();
-        state.activeSource = null;
-        state.selected.clear();
-        state.cache.clear();
+      function scanErrorMessage(error) {
+        return ["EPERM", "EACCES"].includes(error?.code) || /\b(?:EPERM|EACCES)\b/.test(error?.message || "")
+          ? t("importer.source.permissionDenied")
+          : String(error?.message || t("importer.source.scanFailed"));
+      }
 
-        const cards = [];
-        for (const a of state.adapters) {
-          const card = document.createElement("div");
-          card.className = "source-card dim";
-          const sname = document.createElement("div");
-          sname.className = "sname";
-          sname.textContent = a.label;
-          if (a.custom) {
-            const badge = document.createElement("span");
-            badge.className = "sbadge";
-            badge.textContent = t("importer.custom.badge");
-            sname.appendChild(badge);
+      async function scanSources({ refresh = false } = {}) {
+        if (state.scanning) return;
+        state.scanning = true;
+        const version = ++state.scanVersion;
+        $("scan-btn").disabled = true;
+        try {
+          const grid = $("source-grid");
+          clear(grid);
+          $("panes").classList.add("hidden");
+          setStatus(t("importer.status.scanning"));
+          state.sources = new Map();
+          state.activeSource = null;
+          state.selected.clear();
+          state.cache.clear();
+
+          const cards = [];
+          for (const a of state.adapters) {
+            const card = document.createElement("div");
+            card.className = "source-card dim";
+            const sname = document.createElement("div");
+            sname.className = "sname";
+            sname.textContent = a.label;
+            if (a.custom) {
+              const badge = document.createElement("span");
+              badge.className = "sbadge";
+              badge.textContent = t("importer.custom.badge");
+              sname.appendChild(badge);
+            }
+            const scount = document.createElement("div");
+            scount.className = "scount";
+            scount.textContent = t("importer.source.detecting");
+            card.append(sname, scount);
+            card.addEventListener("click", () => openSource(a.source));
+            grid.appendChild(card);
+            cards.push({ adapter: a, card });
           }
-          const scount = document.createElement("div");
-          scount.className = "scount";
-          scount.textContent = t("importer.source.detecting");
-          card.append(sname, scount);
-          card.addEventListener("click", () => openSource(a.source));
-          grid.appendChild(card);
-          cards.push({ adapter: a, card });
+          await Promise.all(
+            cards.map(async ({ adapter, card }) => {
+              let res;
+              try {
+                res = await bridge.invoke("import.scanSource", { source: adapter.source, ...(refresh ? { full: true } : {}) });
+              } catch (error) {
+                res = { found: false, count: 0, error: { code: error?.code, message: String(error?.message || error) } };
+              }
+              state.sources.set(adapter.source, res);
+              card.classList.remove("dim");
+              if (res.found) {
+                const sc = card.querySelector(".scount");
+                paintCount(sc, res, adapter.source);
+                sc.classList.add("ok");
+                if (res.error) { sc.classList.add("warn"); sc.title = res.error.message; sc.textContent += ` · ${scanErrorMessage(res.error)}`; }
+              } else if (res.error && res.error.code === "TIMEOUT") {
+                const sc = card.querySelector(".scount");
+                sc.textContent = t("importer.source.scanTimeout");
+                sc.classList.add("warn");
+              } else if (res.error) {
+                const sc = card.querySelector(".scount");
+                sc.textContent = scanErrorMessage(res.error);
+                sc.title = res.error.message;
+                sc.classList.add("warn");
+              } else {
+                card.querySelector(".scount").textContent = t("importer.source.notFound");
+              }
+            }),
+          );
+          setStatus(t("importer.status.scanDone"), "ok");
+          // A partial result came from a cheap first pass; the plugin keeps
+          // scanning and updates the count in place once it is complete.
+          void refreshPartialSources(cards, version);
+        } catch (error) {
+          setStatus(scanErrorMessage(error), "err");
+        } finally {
+          state.scanning = false;
+          $("scan-btn").disabled = false;
         }
-        await Promise.all(
-          cards.map(async ({ adapter, card }) => {
-            let res;
-            try {
-              res = await bridge.invoke("import.scanSource", { source: adapter.source, ...(adapter.source.startsWith("qoder-") ? { full: true } : {}) });
-            } catch {
-              res = { found: false, count: 0 };
-            }
-            state.sources.set(adapter.source, res);
-            card.classList.remove("dim");
-            if (res.found) {
-              const sc = card.querySelector(".scount");
-              paintCount(sc, res, adapter.source);
-              sc.classList.add("ok");
-              if (res.error) { sc.classList.add("warn"); sc.textContent += ` · ${t("importer.source.scanFailed")}: ${res.error.message}`; }
-            } else if (res.error && res.error.code === "TIMEOUT") {
-              const sc = card.querySelector(".scount");
-              sc.textContent = t("importer.source.scanTimeout");
-              sc.classList.add("warn");
-            } else if (res.error) {
-              const sc = card.querySelector(".scount");
-              sc.textContent = `${t("importer.source.scanFailed")}: ${res.error.message}`;
-              sc.classList.add("warn");
-            } else {
-              card.querySelector(".scount").textContent = t("importer.source.notFound");
-            }
-          }),
-        );
-        setStatus(t("importer.status.scanDone"), "ok");
-        // A partial result came from a cheap first pass; the plugin keeps
-        // scanning and updates the count in place once it is complete.
-        void refreshPartialSources(cards);
       }
 
       function paintCount(node, res, source) {
@@ -568,7 +587,7 @@
         node.dataset.source = source;
       }
 
-      async function refreshPartialSources(cards) {
+      async function refreshPartialSources(cards, version) {
         const partial = cards.filter(({ adapter }) => {
           const info = state.sources.get(adapter.source);
           return info?.partial === true;
@@ -578,6 +597,7 @@
         // times so the card count settles without the user re-clicking.
         for (let attempt = 0; attempt < 10; attempt += 1) {
           await new Promise((r) => setTimeout(r, 1200));
+          if (state.scanVersion !== version) return;
           let anyPartial = false;
           await Promise.all(
             partial.map(async ({ adapter, card }) => {
@@ -587,6 +607,7 @@
               } catch {
                 return;
               }
+              if (state.scanVersion !== version) return;
               state.sources.set(adapter.source, res);
               const sc = card.querySelector(".scount");
               paintCount(sc, res, adapter.source);
@@ -923,7 +944,7 @@
         }
       }
 
-      $("scan-btn").addEventListener("click", scanSources);
+      $("scan-btn").addEventListener("click", () => scanSources({ refresh: true }));
       $("import-btn").addEventListener("click", importSelected);
       // Imports bind to the source project by default (host ensure_project on
       // projectPath); sessions with no project path fall back to the standalone
@@ -986,7 +1007,7 @@
             state.adapters = await bridge.invoke("import.adapters");
             renderCustomSources(info);
             // Re-scan so a newly added source shows up immediately.
-            await scanSources();
+            await scanSources({ refresh: true });
             setStatus(t("importer.custom.reloaded"), "ok");
           } catch (err) {
             setStatus(
@@ -995,7 +1016,8 @@
             );
           }
         });
-      })();
+        await scanSources();
+      })().catch((error) => setStatus(scanErrorMessage(error), "err"));
     </script>
   </body>
 </html>
