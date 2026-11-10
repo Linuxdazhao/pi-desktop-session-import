@@ -532,7 +532,7 @@
             cards.map(async ({ adapter, card }) => {
               let res;
               try {
-                res = await bridge.invoke("import.scanSource", { source: adapter.source, ...(refresh ? { full: true } : {}) });
+                res = await bridge.invoke("import.scanSource", { source: adapter.source, ...(refresh ? { full: true } : { refresh: true }) });
               } catch (error) {
                 res = { found: false, count: 0, error: { code: error?.code, message: String(error?.message || error) } };
               }
