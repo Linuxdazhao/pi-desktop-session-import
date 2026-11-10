@@ -62,6 +62,13 @@ test("plugin entry scans, previews, remaps and imports Qoder through the existin
   await main.onPanelInvoke("import.project", { source: "qoder-cli", projectId: projects[0].id, destinationPath: destination });
   assert.equal(batches.length, 0, "project-only operation writes no conversation");
   assert.equal(projectCalls.length, 1);
+  const officialSdk = globalThis.pi.session;
+  const legacyWrites = [];
+  globalThis.pi.session = { import: async (input) => { legacyWrites.push(input); return { imported: true }; } };
+  const legacy = await main.onPanelInvoke("import.commit", { source: "qoder-cli", items: sessions });
+  assert.equal(legacy.imported, 1);
+  assert.equal(legacyWrites[0].session.projectPath, fs.realpathSync(destination), "legacy Host must preserve the reviewed mapping too");
+  globalThis.pi.session = officialSdk;
   const first = await main.onPanelInvoke("import.commit", { source: "qoder-cli", items: sessions });
   assert.equal(first.imported, 1);
   assert.equal(batches[0].source, "qoder-cli");

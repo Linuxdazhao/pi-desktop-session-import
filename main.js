@@ -919,6 +919,18 @@ async function resolveProjectId(path) {
   return id;
 }
 
+async function convertForCommit(adapter, source, item, bindProjects) {
+  const conv = await withTimeout(() => adapter.convert(item), CONVERT_TIMEOUT_MS, `${source}.convert`);
+  if (adapter.prepareProject && conv.session.projectPath && bindProjects) {
+    const original = conv.session.projectPath;
+    const mapping = projectMappings.get(`${source}:${original}`);
+    const project = adapter.listProjects().find((p) => p.path === original);
+    const prepared = await adapter.prepareProject(project?.id, mapping?.path);
+    conv.session.projectPath = prepared.path;
+  }
+  return conv;
+}
+
 /**
  * Convert + import the selected summaries through the official API.
  * Chunked at the contract batch limit; aggregates importBatch results.
@@ -932,17 +944,8 @@ async function commitOfficial(source, items, placement) {
   // parsed), so run it with a small concurrency pool instead of serially —
   // a 60-session Claude Code import dropped from ~50s to a few seconds.
   const startedAt = Date.now();
-  const converted = await mapWithConcurrency(items, CONVERT_CONCURRENCY, async (item) => {
-    const conv = await withTimeout(() => adapter.convert(item), CONVERT_TIMEOUT_MS, `${source}.convert`);
-    if (adapter.prepareProject && conv.session.projectPath && bindProjects) {
-      const original = conv.session.projectPath;
-      const mapping = projectMappings.get(`${source}:${original}`);
-      const project = adapter.listProjects().find((p) => p.path === original);
-      const prepared = await adapter.prepareProject(project?.id, mapping?.path);
-      conv.session.projectPath = prepared.path;
-    }
-    return conv;
-  });
+  const converted = await mapWithConcurrency(items, CONVERT_CONCURRENCY, (item) =>
+    convertForCommit(adapter, source, item, bindProjects));
   const convertedAt = Date.now();
   const convertMs = convertedAt - startedAt;
 
@@ -1042,11 +1045,7 @@ async function commitLegacy(source, items) {
   const failed = [];
   for (const item of items) {
     try {
-      const conv = await withTimeout(
-        () => adapter.convert(item),
-        CONVERT_TIMEOUT_MS,
-        `${source}.convert`,
-      );
+      const conv = await convertForCommit(adapter, source, item, true);
       const messages = (conv.messages || []).map((m) => ({ id: crypto.randomUUID(), ...m }));
       // Plain host API call — bound through a destructured local so the source
       // never spells the `import(` dynamic-module pattern that the
