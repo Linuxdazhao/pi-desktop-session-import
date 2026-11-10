@@ -377,6 +377,11 @@ async function scanSource(payload) {
   const adapter = getAdapter(source);
   if (!adapter) throw new Error(`unknown source: ${source}`);
   const wantsFull = payload?.full === true;
+  if (payload?.refresh === true) {
+    cache.delete(source);
+    cacheError.delete(source);
+    cachePartial.delete(source);
+  }
   if (cache.has(source) && !wantsFull) {
     const sessions = cache.get(source);
     // Cached entries keep their original error (frozen at scan time) so the

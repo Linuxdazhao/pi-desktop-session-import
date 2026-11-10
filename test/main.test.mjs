@@ -147,7 +147,7 @@ describe("F-10 import.scanSource — error observability (P0 of v0.5.0)", () => 
     await assert.rejects(() => main.onPanelInvoke("import.scanSource", { source: "nope" }), /unknown source: nope/);
   });
 
-  test("cache prevents re-scan across same source", async () => {
+  test("polls use cached scans while opening and explicit refresh reread sources", async () => {
     let scanCalls = 0;
     installRegistry([
       {
@@ -165,6 +165,10 @@ describe("F-10 import.scanSource — error observability (P0 of v0.5.0)", () => 
     await main.onPanelInvoke("import.scanSource", { source: "c" });
     await main.onPanelInvoke("import.scanSource", { source: "c" });
     assert.strictEqual(scanCalls, 1, "scanned exactly once");
+    await main.onPanelInvoke("import.scanSource", { source: "c", refresh: true });
+    assert.strictEqual(scanCalls, 2, "opening a new panel refreshes cached discovery");
+    await main.onPanelInvoke("import.scanSource", { source: "c", full: true });
+    assert.strictEqual(scanCalls, 3, "explicit Rescan rereads the full source");
   });
 });
 
