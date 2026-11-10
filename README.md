@@ -1,6 +1,6 @@
 # Universal Session Import（一体化会话导入）
 
-PI-Desktop 插件：**扫描本机安装的编程工具，把它们（ZCode、WorkBuddy、Claude Code、Codex、OpenCode、Pi）的本地会话统一导入 PI-Desktop。**
+PI-Desktop 插件：**扫描本机安装的编程工具，把它们（ZCode、WorkBuddy、Claude Code、Codex、OpenCode、Pi、Qoder Desktop、Qoder IDE、Qoder CLI）的本地会话统一导入 PI-Desktop。**
 
 ![scan sources](docs/screenshots/01-scan-sources.png)
 
@@ -8,7 +8,7 @@ PI-Desktop 插件：**扫描本机安装的编程工具，把它们（ZCode、Wo
 
 ### 1. 扫描本机工具
 
-打开面板点击「扫描本机工具」，插件并行探测六个来源，实时显示各自检测到的会话数（未安装的工具显示「未检测到」）。
+打开面板点击「扫描本机工具」，插件并行探测九个来源，实时显示各自检测到的会话数（未安装的工具显示「未检测到」）。
 
 ### 2. 选择来源，浏览会话
 
@@ -46,10 +46,20 @@ PI-Desktop 插件：**扫描本机安装的编程工具，把它们（ZCode、Wo
 | Codex | `~/.codex/sessions/**/*.jsonl` | 兼容新旧两种格式；过滤 `# AGENTS.md` 等合成行 |
 | OpenCode | `%LOCALAPPDATA%\opencode\data\opencode.db`（Windows）/ `~/.local/share/opencode/opencode.db`（macOS/Linux，尊重 `XDG_DATA_HOME`） | `node:sqlite` 只读；session→message→part 三层还原（OpenCode v1.x SQLite）；多候选路径按序探测 |
 | Pi | `~/.pi/agent/sessions/**/*.jsonl` | `toolCall`/`toolResult` 配对；`session_info.name` 优先 |
+| Qoder Desktop | App data `com.qoder.app*/main.sqlite` | Read-only WAL-aware snapshots; workspace registry; payload/column roles; ordered text, reasoning and tools |
+| Qoder IDE | `User/workspaceStorage`, `User/globalStorage/state.vscdb`, `~/.qoder/projects/*/transcript/*.jsonl` | Workspace URI mapping and index metadata; incomplete index-only records remain visible and cannot be imported as full conversations |
+| Qoder CLI | `~/.qoder/projects/*/*.jsonl` and sibling `state.json` | Structured workspace roots; active/sibling branches; source identity and digest verification |
+
+Qoder sources also expose **Register project** independently of conversation
+selection. Review the destination folder before registering; replace a missing
+source path with an existing local folder, then import its conversations.
+Each source root is registered separately through the existing Host project API.
+See [Qoder import behavior, supported formats and validation](docs/QODER-IMPORT.md).
+Qoder memory, instructions, credentials and schedules are not imported.
 
 ## 自定义来源（无需改代码）
 
-内置 6 个来源之外，你可以在**当前工作区**放一份纯 JSON，描述自己的工具：
+内置 9 个来源之外，你可以在**当前工作区**放一份纯 JSON，描述自己的工具：
 
 ```
 docs/session-import-sources.json

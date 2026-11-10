@@ -268,9 +268,9 @@ describe("end-to-end: config -> registry -> pipeline", () => {
     assert.equal(dynamic.length, 1);
     assert.equal(dynamic[0].source, "mytool");
 
-    // Built-ins stay at 6 (ADR 0008) while the pipeline sees 7.
-    assert.equal(registry.ADAPTERS.length, 6);
-    assert.equal(registry.allAdapters().length, 7);
+    // A custom source extends the shipped registry without replacing it.
+    assert.equal(registry.ADAPTERS.length, 9);
+    assert.equal(registry.allAdapters().length, 10);
     assert.ok(registry.getAdapter("mytool"), "custom source is resolvable");
 
     // ...and it really scans through the same entry point main.js uses.

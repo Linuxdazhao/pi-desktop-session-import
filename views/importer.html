@@ -338,6 +338,10 @@
         main.panes { grid-template-columns: 1fr; grid-template-rows: 40% 1fr; }
       }
       main.panes { container-type: inline-size; }
+      #project-list { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+      .project-row { display: flex; gap: 6px; flex-wrap: wrap; padding: 5px 0; }
+      .project-row input { flex: 1; min-width: 120px; }
+      .project-row span { width: 100%; font-size: 12px; }
     </style>
   </head>
   <body data-page-node-id="0BNBnLcttcjmtFjmnSIlbD">
@@ -370,6 +374,7 @@
             <button class="link" id="select-all" data-page-node-id="GsfWHgNBXTVsI2b6zWUp71">全选</button>
             <button class="link" id="clear-all" data-page-node-id="CHOZtdrqLhdtLzcZWT9CyA">清除</button>
           </div>
+          <div id="project-list" class="hidden"></div>
           <div id="session-list" role="listbox" aria-label="会话列表" data-page-node-id="A4xXuv0GToepshH3M8W8EY"></div>
         </section>
 
@@ -403,6 +408,7 @@
         adapters: [],
         sources: new Map(), // source -> {found, count}
         sessions: [],
+        projects: [],
         activeSource: null,
         selected: new Set(),
         activeKey: null,
@@ -520,7 +526,7 @@
           cards.map(async ({ adapter, card }) => {
             let res;
             try {
-              res = await bridge.invoke("import.scanSource", { source: adapter.source });
+              res = await bridge.invoke("import.scanSource", { source: adapter.source, ...(adapter.source.startsWith("qoder-") ? { full: true } : {}) });
             } catch {
               res = { found: false, count: 0 };
             }
@@ -553,6 +559,7 @@
         if (!node) return;
         const base = t("importer.count.sessions", { count: res.count });
         node.textContent = res.partial ? `${base} ${t("importer.count.scanningMore")}` : base;
+        if (res.projectCount) node.textContent += ` · ${t("importer.count.projects", { count: res.projectCount })}`;
         if (res.oversized > 0) {
           node.textContent += ` ${t("importer.count.oversized", { count: res.oversized })}`;
           node.classList.add("warn");
@@ -606,7 +613,10 @@
         bridge
           .invoke("import.sessions", { source })
           .then((res) => {
+            if (state.activeSource !== source) return;
             state.sessions = res.sessions;
+            state.projects = res.projects || [];
+            renderProjects();
             renderList();
             renderPreviewEmpty();
             updateCount();
@@ -632,6 +642,46 @@
           // persistence is best-effort; collapse still works in-session
         }
       };
+
+      function warningText(warnings = []) {
+        return t("importer.warning", { warnings: warnings.map((code) => t(`importer.warning.${code}`)).join(SEP()) });
+      }
+
+      function renderProjects() {
+        const box = $("project-list");
+        clear(box);
+        box.classList.toggle("hidden", !state.projects.length);
+        if (!state.projects.length) return;
+        const heading = document.createElement("strong");
+        heading.textContent = t("importer.projects");
+        box.appendChild(heading);
+        const source = state.activeSource;
+        for (const project of state.projects) {
+          const row = document.createElement("div");
+          row.className = "project-row";
+          const name = document.createElement("span");
+          name.textContent = project.name;
+          const input = document.createElement("input");
+          input.value = project.path;
+          input.setAttribute("aria-label", `${t("importer.project.destination")}: ${project.name}`);
+          const button = document.createElement("button");
+          button.textContent = t("importer.project.import");
+          button.addEventListener("click", async () => {
+            button.disabled = true;
+            try {
+              const result = await bridge.invoke("import.project", { source, projectId: project.id, destinationPath: input.value });
+              if (state.activeSource === source) {
+                state.cache.clear();
+                setStatus(t("importer.project.done", { path: result.path }), "ok");
+              }
+            } catch (error) {
+              if (state.activeSource === source) setStatus(t("importer.project.failed", { error }), "err");
+            } finally { button.disabled = false; }
+          });
+          row.append(name, input, button);
+          box.appendChild(row);
+        }
+      }
 
       function renderList() {
         const q = $("filter").value.trim().toLowerCase();
@@ -671,13 +721,14 @@
           gcount.textContent = t("importer.count.sessions", { count: sessions.length });
           head.append(chev, gname, gcount);
 
-          const allSelected = sessions.every((s) => state.selected.has(s.externalId));
+          const selectable = sessions.filter((s) => s.importable !== false);
+          const allSelected = selectable.length > 0 && selectable.every((s) => state.selected.has(s.externalId));
           const btn = document.createElement("button");
           btn.textContent = allSelected ? t("importer.group.deselectAll") : t("importer.group.selectAll");
           // Selecting a whole project must not toggle the accordion.
           btn.addEventListener("click", (e) => {
             e.stopPropagation();
-            for (const s of sessions) {
+            for (const s of selectable) {
               allSelected ? state.selected.delete(s.externalId) : state.selected.add(s.externalId);
             }
             renderList();
@@ -712,6 +763,7 @@
             row.setAttribute("role", "option");
             const cb = document.createElement("input");
             cb.type = "checkbox";
+            cb.disabled = s.importable === false;
             cb.checked = state.selected.has(s.externalId);
             cb.addEventListener("click", (e) => e.stopPropagation());
             cb.addEventListener("change", () => {
@@ -731,6 +783,11 @@
             const mCount = document.createElement("span");
             mCount.textContent = t("importer.preview.Nmessages", { count: s.messageCount });
             metaEl.append(mDate, mDot, mCount);
+            if (s.warnings?.length) {
+              const warning = document.createElement("span");
+              warning.textContent = warningText(s.warnings);
+              metaEl.appendChild(warning);
+            }
             text.append(titleEl, metaEl);
             row.append(cb, text);
             row.addEventListener("click", () => selectSession(s));
@@ -751,6 +808,7 @@
       }
 
       async function selectSession(summary) {
+        const source = state.activeSource;
         state.activeKey = summary.externalId;
         renderList();
         $("preview-empty").classList.add("hidden");
@@ -758,23 +816,32 @@
         $("messages").classList.remove("hidden");
         clear($("messages"));
         setStatus(t("importer.status.loadingList"));
+        if (summary.importable === false) {
+          $("pv-title").textContent = summary.fullTitle || summary.title;
+          $("pv-meta").textContent = warningText(summary.warnings);
+          setStatus(warningText(summary.warnings), "warn");
+          return;
+        }
         try {
           const cacheKey = `${state.activeSource}:${summary.externalId}`;
           let converted = state.cache.get(cacheKey);
           if (!converted) {
             const res = await bridge.invoke("import.convertBatch", {
-              source: state.activeSource,
+              source,
               items: [summary],
             });
             converted = res.sessions[0];
+            if (!converted) throw new Error(t("importer.unreadable", { count: 1 }));
             state.cache.set(cacheKey, converted);
           }
+          if (state.activeSource !== source || state.activeKey !== summary.externalId) return;
           $("pv-title").textContent = converted.session.title;
           $("pv-meta").textContent = [
             converted.session.projectPath ?? t("importer.preview.noProject"),
             converted.session.modelId ?? t("importer.preview.unknownModel"),
             t("importer.preview.Nmessages", { count: converted.messages.length }),
             t("importer.preview.updatedAt", { date: fmtDate(converted.session.updatedAt) }),
+            ...(converted.warnings?.length ? [warningText(converted.warnings)] : []),
           ].join(" · ");
           const box = $("messages");
           for (const m of converted.messages) {
@@ -811,7 +878,7 @@
       }
 
       async function importSelected() {
-        const summaries = state.sessions.filter((s) => state.selected.has(s.externalId));
+        const summaries = state.sessions.filter((s) => s.importable !== false && state.selected.has(s.externalId));
         if (summaries.length === 0) return;
         $("import-btn").disabled = true;
         setStatus(t("importer.importing", { count: summaries.length }));
@@ -829,6 +896,9 @@
           if (r.skipped) parts.push(t("importer.skipped", { count: r.skipped }));
           if (r.unreadable) parts.push(t("importer.unreadable", { count: r.unreadable }));
           if (r.failed?.length) parts.push(t("importer.failed", { count: r.failed.length }));
+          if (state.activeSource?.startsWith("qoder-") && r.failed?.length) {
+            parts.push(r.failed.slice(0, 3).map((failure) => failure.error).join(SEP()));
+          }
           if (r.truncated) parts.push(t("importer.truncated", { count: r.truncated }));
           if (r.imported === 0 && r.failed?.length) parts.push(t("importer.hostHint"));
           if (r.timings) {
@@ -860,7 +930,7 @@
       $("filter").addEventListener("input", renderList);
       $("select-all").addEventListener("click", () => {
         const q = $("filter").value.trim().toLowerCase();
-        for (const s of state.sessions) if (matchesFilter(s, q)) state.selected.add(s.externalId);
+        for (const s of state.sessions) if (s.importable !== false && matchesFilter(s, q)) state.selected.add(s.externalId);
         renderList();
         updateCount();
       });

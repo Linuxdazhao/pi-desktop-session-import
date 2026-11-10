@@ -77,6 +77,18 @@
           "en": "Pi",
           "zh-CN": "Pi"
         }
+      },
+      {
+        "id": "qoder-desktop",
+        "label": { "en": "Qoder Desktop", "zh-CN": "Qoder Desktop" }
+      },
+      {
+        "id": "qoder-ide",
+        "label": { "en": "Qoder IDE", "zh-CN": "Qoder IDE" }
+      },
+      {
+        "id": "qoder-cli",
+        "label": { "en": "Qoder CLI", "zh-CN": "Qoder CLI" }
       }
     ],
     "views": [

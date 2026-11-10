@@ -19,11 +19,11 @@ const require = createRequire(import.meta.url);
 const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const { ADAPTERS, getAdapter } = require(`${PLUGIN_DIR}/lib/registry.js`);
 
-const EXPECTED_SOURCES = ["zcode", "workbuddy", "claude-code", "codex", "opencode", "pi"];
+const EXPECTED_SOURCES = ["zcode", "workbuddy", "claude-code", "codex", "opencode", "pi", "qoder-desktop", "qoder-ide", "qoder-cli"];
 
 describe("registry", () => {
-  test("ADAPTERS has exactly 6 sources (mandatory by ADR 0008)", () => {
-    assert.strictEqual(ADAPTERS.length, 6);
+  test("ADAPTERS includes each shipped source once", () => {
+    assert.deepEqual(ADAPTERS.map((a) => a.source).sort(), [...EXPECTED_SOURCES].sort());
   });
 
   for (const source of EXPECTED_SOURCES) {

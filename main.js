@@ -30,6 +30,7 @@ const saveModes = require("./lib/save-modes");
 
 /** Scan results cached per source so switching sources never rescans. */
 const cache = new Map();
+const projectMappings = new Map();
 
 async function onLoad() {
   await pi.commands.register({
@@ -140,6 +141,20 @@ async function onPanelInvoke(channel, payload) {
       return scanSource(payload);
     case "import.sessions":
       return sessions(payload);
+    case "import.project": {
+      const source = String(payload?.source ?? "");
+      const adapter = getAdapter(source);
+      if (!adapter?.prepareProject || typeof pi?.project?.create !== "function") {
+        throw new Error("Host project registration is unavailable");
+      }
+      const original = adapter.listProjects().find((p) => p.id === payload?.projectId);
+      const prepared = await adapter.prepareProject(payload?.projectId, payload?.destinationPath);
+      const result = await pi.project.create(prepared);
+      const projectId = Number(result?.projectId ?? result?.id);
+      if (!Number.isSafeInteger(projectId) || projectId <= 0) throw new Error("Host did not register the project");
+      projectMappings.set(`${source}:${original.path}`, { ...prepared, projectId });
+      return { projectId, path: prepared.path };
+    }
     case "import.convertBatch":
       return convertBatch(payload);
     case "import.capabilities":
@@ -369,10 +384,11 @@ async function scanSource(payload) {
     const error = cacheError.get(source) ?? null;
     return {
       source,
-      found: sessions.length > 0,
+      found: sessions.length > 0 || (adapter.listProjects?.().length || 0) > 0,
       count: sessions.length,
       error,
       partial: cachePartial.get(source) === true,
+      ...(adapter.listProjects ? { projectCount: adapter.listProjects().length } : {}),
     };
   }
 
@@ -413,11 +429,12 @@ async function scanSource(payload) {
   }
   return {
     source,
-    found: sessions.length > 0,
+    found: sessions.length > 0 || (adapter.listProjects?.().length || 0) > 0,
     count: sessions.length,
     error,
     partial: useFast,
     oversized: oversizedCount,
+    ...(adapter.listProjects ? { projectCount: adapter.listProjects().length } : {}),
   };
 }
 
@@ -487,7 +504,8 @@ const cacheError = new Map();
 function sessions(payload) {
   const source = String(payload?.source ?? "");
   if (!cache.has(source)) throw new Error(`source not scanned: ${source}`);
-  return { source, sessions: cache.get(source) };
+  const adapter = getAdapter(source);
+  return { source, sessions: cache.get(source), ...(adapter?.listProjects ? { projects: adapter.listProjects() } : {}) };
 }
 
 async function convertBatch(payload) {
@@ -506,6 +524,8 @@ async function convertBatch(payload) {
         CONVERT_TIMEOUT_MS,
         `${source}.convert`,
       );
+      const mapping = projectMappings.get(`${source}:${conv.session.projectPath}`);
+      if (adapter.prepareProject && mapping) conv.session.projectPath = mapping.path;
       // Host UiMessage requires an id on every message; adapters describe
       // content only, so allocate ids here in one place.
       conv.messages = conv.messages.map((m) => ({
@@ -910,9 +930,17 @@ async function commitOfficial(source, items, placement) {
   // parsed), so run it with a small concurrency pool instead of serially —
   // a 60-session Claude Code import dropped from ~50s to a few seconds.
   const startedAt = Date.now();
-  const converted = await mapWithConcurrency(items, CONVERT_CONCURRENCY, (item) =>
-    withTimeout(() => adapter.convert(item), CONVERT_TIMEOUT_MS, `${source}.convert`),
-  );
+  const converted = await mapWithConcurrency(items, CONVERT_CONCURRENCY, async (item) => {
+    const conv = await withTimeout(() => adapter.convert(item), CONVERT_TIMEOUT_MS, `${source}.convert`);
+    if (adapter.prepareProject && conv.session.projectPath && bindProjects) {
+      const original = conv.session.projectPath;
+      const mapping = projectMappings.get(`${source}:${original}`);
+      const project = adapter.listProjects().find((p) => p.path === original);
+      const prepared = await adapter.prepareProject(project?.id, mapping?.path);
+      conv.session.projectPath = prepared.path;
+    }
+    return conv;
+  });
   const convertedAt = Date.now();
   const convertMs = convertedAt - startedAt;
 
@@ -930,12 +958,14 @@ async function commitOfficial(source, items, placement) {
   }
 
   const contractSessions = [];
+  const conversionFailures = [];
   let unreadable = 0;
   let truncated = 0; // sessions that lost content to the host's byte caps
   for (let i = 0; i < items.length; i += 1) {
     const outcome = converted[i];
     if (!outcome?.ok) {
-      unreadable += 1;
+      if (adapter.prepareProject) conversionFailures.push({ externalId: items[i].externalId, error: String(outcome?.error?.message || "Source could not be read") });
+      else unreadable += 1;
       continue;
     }
     const conv = outcome.value;
@@ -954,7 +984,7 @@ async function commitOfficial(source, items, placement) {
 
   let imported = 0;
   let skipped = 0;
-  const failed = [];
+  const failed = [...conversionFailures];
   const batchTimes = [];
   for (let i = 0; i < contractSessions.length; i += CONTRACT.batchSessionsMax) {
     const chunk = contractSessions.slice(i, i + CONTRACT.batchSessionsMax);
